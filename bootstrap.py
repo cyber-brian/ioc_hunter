@@ -1,3 +1,6 @@
+# pcap-threat-hunter: Minimal, Modular, Powerful
+
+# === File: bootstrap.py ===
 import os
 import subprocess
 import sys
@@ -66,8 +69,8 @@ def query_virustotal(value):
     if response.status_code == 200:
         json = response.json()
         score = json['data']['attributes']['last_analysis_stats']['malicious']
-        return f"malicious score: {score}"
-    return "no data"
+        return f"malicious score: {score}", score > 0
+    return "no data", False
 
 def query_abuseipdb(ip):
     headers = {"Key": API_KEYS['abuseipdb'], "Accept": "application/json"}
@@ -76,8 +79,8 @@ def query_abuseipdb(ip):
     if response.status_code == 200:
         json = response.json()
         score = json['data']['abuseConfidenceScore']
-        return f"abuse score: {score}"
-    return "no data"
+        return f"abuse score: {score}", score > 0
+    return "no data", False
 
 def query_otx(value):
     headers = {"X-OTX-API-KEY": API_KEYS['otx']}
@@ -87,8 +90,8 @@ def query_otx(value):
     if response.status_code == 200:
         json = response.json()
         pulses = len(json.get('pulse_info', {}).get('pulses', []))
-        return f"in {pulses} threat pulses"
-    return "no data"
+        return f"in {pulses} threat pulses", pulses > 0
+    return "no data", False
 
 def enrich_iocs(iocs):
     enriched = {}
@@ -96,16 +99,19 @@ def enrich_iocs(iocs):
         enriched[key] = []
         for item in iocs[key]:
             result = {"value": item, "score": "unknown", "source": "local"}
+            is_malicious = False
             if USE_VT:
-                result["score"] = query_virustotal(item)
+                result["score"], is_malicious = query_virustotal(item)
                 result["source"] = "VirusTotal"
             elif USE_ABUSEIPDB and key == "ips":
-                result["score"] = query_abuseipdb(item)
+                result["score"], is_malicious = query_abuseipdb(item)
                 result["source"] = "AbuseIPDB"
             elif USE_OTX:
-                result["score"] = query_otx(item)
+                result["score"], is_malicious = query_otx(item)
                 result["source"] = "AlienVault OTX"
-            enriched[key].append(result)
+
+            if is_malicious:
+                enriched[key].append(result)
     return enriched
 ''',
 
@@ -129,12 +135,12 @@ def enrich_iocs(iocs):
         f.write("# PCAP Threat Hunter Report\n\n")
         f.write("## Indicators of Compromise\n")
         for k, v in iocs.items():
+            if not v:
+                continue
             f.write(f"### {k}\n")
             for item in v:
                 if isinstance(item, dict):
                     f.write(f"- {item['value']} ({item['score']}) from {item['source']}\n")
-                else:
-                    f.write(f"- {item}\n")
 
         f.write("\n## MITRE ATT&CK Techniques\n")
         for m in mitre_techniques:
